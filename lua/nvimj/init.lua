@@ -5,6 +5,7 @@ M.repl_buf_nr = -1
 local config = {
   command = "~/j9.7/bin/jconsole"
 }
+local ns_id = vim.api.nvim_create_namespace('repl_marks')
 
 M.setup = function (user_opts)
   config = vim.tbl_deep_extend("force", config, user_opts or {})
@@ -39,8 +40,21 @@ M.send_to_repl = function()
 
   -- Get current line
   local line = vim.api.nvim_get_current_line()
+
+  local cursor_pos = vim.api.nvim_win_get_cursor(0)
+  local line_idx = cursor_pos[1] - 1
   -- Send to terminal job (append \n to execute)
   vim.fn.chansend(M.repl_job_id, line .. "\n")
+
+  vim.api.nvim_buf_set_extmark(0, ns_id, line_idx, 0, {
+    virt_text = { { " ✓ ", "DiagnosticOk" } }, -- Virtual text at end of line
+    virt_text_pos = "eol", -- Position at End Of Line
+    line_hl_group = "CursorLine", -- Optional: highlight the line
+    sign_text = "»", -- Optional: put a sign in the gutter
+    sign_hl_group = "String",
+  })
+
+
   local windows = vim.api.nvim_list_wins()
   for _, win in ipairs(windows) do
     if vim.api.nvim_win_get_buf(win) == M.repl_buf_nr then
