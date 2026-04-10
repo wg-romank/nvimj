@@ -9,6 +9,18 @@ local ns_id = vim.api.nvim_create_namespace('repl_marks')
 
 M.setup = function (user_opts)
   config = vim.tbl_deep_extend("force", config, user_opts or {})
+
+  vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
+    buffer = 0,     -- Current buffer
+    callback = function()
+      local line_idx = vim.api.nvim_win_get_cursor(0)[1] - 1
+      local mark_id = line_idx + 1
+
+      -- Delete the mark for this line if it exists
+      -- This signals that the line is no longer "in sync" with the REPL
+      pcall(vim.api.nvim_buf_del_extmark, 0, ns_id, mark_id)
+    end
+  })
 end
 
 M.open_repl = function()
@@ -46,7 +58,10 @@ M.send_to_repl = function()
   -- Send to terminal job (append \n to execute)
   vim.fn.chansend(M.repl_job_id, line .. "\n")
 
+  local mark_id = line_idx + 1
+
   vim.api.nvim_buf_set_extmark(0, ns_id, line_idx, 0, {
+    id = mark_id,
     virt_text = { { " ✓ ", "DiagnosticOk" } }, -- Virtual text at end of line
     virt_text_pos = "eol", -- Position at End Of Line
     line_hl_group = "CursorLine", -- Optional: highlight the line
