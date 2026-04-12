@@ -56,7 +56,7 @@ M.send_to_repl = function()
   local cursor_pos = vim.api.nvim_win_get_cursor(0)
   local line_idx = cursor_pos[1] - 1
   -- Send to terminal job (append \n to execute)
-  vim.fn.chansend(M.repl_job_id, line .. "\n")
+  vim.fn.chansend(M.repl_job_id, line:match("^%s*(.*)") .. "\n")
 
   local mark_id = line_idx + 1
 
