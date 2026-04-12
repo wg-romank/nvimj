@@ -72,41 +72,43 @@ local function scroll_terminal()
 end
 
 M.send_to_repl = function(type)
-  print("here")
   while M.repl_job_id == 0 or not vim.api.nvim_buf_is_valid(M.repl_buf_nr) do
     M.open_repl()
   end
 
-  local start_mark = vim.api.nvim_buf_get_mark(0, "[")
-  local end_mark = vim.api.nvim_buf_get_mark(0, "]")
+  local type_map = {
+    char = "v",       -- character-wise
+    line = "V",       -- line-wise
+    block = "\22"     -- block-wise (CTRL-V as a raw byte)
+  }
 
-  local start_line = start_mark[1] - 1
-  local end_line = end_mark[1]
+  local mtype = type_map[type] or type
+
+  local start_pos = vim.fn.getpos("'[")
+  local end_pos = vim.fn.getpos("']")
 
   -- For 'char' motions (like 'iw'), we might want just the words.
   -- But for REPLs, 'line' is usually safer.
-  local lines = vim.api.nvim_buf_get_lines(0, start_line, end_line, false)
-  local text = table.concat(lines, "\n") .. "\n"
+  local region = vim.fn.getregion(start_pos, end_pos, { type = mtype })
+  local text = table.concat(region, "\n") .. "\n"
 
   -- Send to terminal job (append \n to execute)
-  vim.fn.chansend(M.repl_job_id, text)
+  vim.fn.chansend(M.repl_job_id, text) -- on stdout set marks
 
   scroll_terminal()
 
-  for i = start_line, end_line - 1 do
+  for i = start_pos[2] - 1, end_pos[2] - 1 do
     apply_marks(i)
   end
 end
 
 M.send_motion = function()
-  print("HERE")
     -- Set the operatorfunc to our Lua function
     -- Note: We use a global wrapper because operatorfunc traditionally 
     -- expects a string pointing to a globally accessible function.
   _G.repl_op_func = M.send_to_repl
   vim.go.operatorfunc = "v:lua.repl_op_func"
 
-  -- Return the keys that trigger the operator
   return "g@"
 end
 
