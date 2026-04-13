@@ -3,7 +3,8 @@ M.repl_job_id = 0
 M.repl_buf_nr = -1
 
 local config = {
-  command = "~/j9.7/bin/jconsole"
+  -- command = "~/j9.7/bin/jconsole"
+  command = 'python'
 }
 local ns_id = vim.api.nvim_create_namespace('repl_marks')
 
@@ -110,6 +111,58 @@ M.send_motion = function()
   vim.go.operatorfunc = "v:lua.repl_op_func"
 
   return "g@"
+end
+
+local curl = require("plenary.curl")
+
+M.fu = function()
+  curl.post("https://example.com",
+    {
+      raw = { "--no-buffer" }, -- Disable curl's internal buffering
+      body = vim.json.encode({ stream = true, prompt = "Hello!" }),
+      stream = function(err, data)
+        if err then
+          print("Error: " .. err)
+          return
+        end
+        if data then
+          -- 'data' is a single chunk/line of the response
+          vim.schedule(function()
+            -- Update your Neovim buffer here
+            print("Received chunk: " .. data)
+          end)
+        end
+      end,
+      callback = function(res)
+        -- This is still called once the entire stream is finished
+        print("Stream complete. Final status: " .. res.status)
+      end,
+    }
+  )
+end
+
+M.ask_gemini = function(prompt)
+  local api_key = os.getenv("GEMINI_API_KEY")
+  local url = "https://googleapis.com"
+
+  curl.post(url, {
+    headers = {
+      ["Content-Type"] = "application/json",
+      ["x-goog-api-key"] = api_key,
+    },
+    body = vim.json.encode({
+      contents = {{ parts = {{ text = prompt }} }}
+    }),
+    callback = function(res)
+      local decoded = vim.json.decode(res.body)
+      -- The text response is nested in candidates -> content -> parts
+      local text = decoded.candidates[1].content.parts[1].text
+
+      vim.schedule(function()
+        print("Gemini says: " .. text)
+      end)
+    end,
+  })
 end
 
 return M
