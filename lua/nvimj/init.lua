@@ -115,51 +115,154 @@ end
 
 local curl = require("plenary.curl")
 
-M.fu = function()
-  curl.post("https://example.com",
-    {
-      raw = { "--no-buffer" }, -- Disable curl's internal buffering
-      body = vim.json.encode({ stream = true, prompt = "Hello!" }),
-      stream = function(err, data)
-        if err then
-          print("Error: " .. err)
-          return
-        end
-        if data then
-          -- 'data' is a single chunk/line of the response
-          vim.schedule(function()
-            -- Update your Neovim buffer here
-            print("Received chunk: " .. data)
-          end)
-        end
-      end,
-      callback = function(res)
-        -- This is still called once the entire stream is finished
-        print("Stream complete. Final status: " .. res.status)
-      end,
-    }
-  )
+local function insert_at_cursor(text)
+  local win = vim.api.nvim_get_current_win()
+  local buf = vim.api.nvim_get_current_buf()
+  local row, col = unpack(vim.api.nvim_win_get_cursor(win))
+  row = row - 1 -- Convert to 0-indexed for API calls
+
+  -- 1. Split the string by newlines
+  -- 'true' as the last argument handles trailing newlines correctly
+  local lines = vim.split(text, "\n", { plain = true })
+
+  -- 2. Insert the lines
+  -- nvim_buf_set_text(buffer, start_row, start_col, end_row, end_col, replacement_lines)
+  vim.api.nvim_buf_set_text(buf, row, col, row, col, lines)
+
+  -- 3. Calculate the NEW cursor position
+  local new_row, new_col
+  if #lines > 1 then
+    -- If there were newlines, the new row is:
+    -- original row + number of new lines (lines - 1)
+    new_row = row + (#lines - 1)
+    -- The new column is just the length of that last partial line
+    new_col = #lines[#lines]
+  else
+    -- If it's a single line chunk, just shift the column right
+    new_row = row
+    new_col = col + #lines[1]
+  end
+
+  -- 4. Set the cursor (API uses 1-indexing for rows, 0-indexing for cols)
+  vim.api.nvim_win_set_cursor(win, { new_row + 1, new_col })
 end
 
-M.ask_gemini = function(prompt)
-  local api_key = os.getenv("GEMINI_API_KEY")
-  local url = "https://googleapis.com"
+local spinner_frames = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" }
+local timer = vim.loop.new_timer()
+local frame = 1
+
+local function start_spinner()
+  timer:start(0, 100, vim.schedule_wrap(function()
+    vim.api.nvim_echo({{ spinner_frames[frame] .. " Gemini is thinking...", "Normal" }}, false, {})
+    frame = (frame % #spinner_frames) + 1
+  end))
+end
+
+local function stop_spinner()
+  timer:stop()
+  vim.api.nvim_echo({{ "", "Normal" }}, false, {}) -- Clear the line
+end
+
+local partial_data = ""
+
+local function greedy_parse_and_insert(chunk)
+  -- 1. Accumulate chunks (in case a JSON object is split across two network packets)
+  partial_data = partial_data .. chunk
+
+  -- 2. Pattern to find the value of the "text" key in Gemini's JSON
+  -- This looks for: "text": " followed by any characters until a non-escaped "
+  -- The [^\"]+ handles the content inside the quotes
+  local pattern = '"text"%s*:%s*"([^"]+)"'
+
+  local last_match_end = 0
+  local batch_text = "" -- Accumulate all text from this chunk here
+
+  -- 1. Collect all matches in this chunk first
+  for text_match, match_end in partial_data:gmatch(pattern .. "()") do
+    local clean_text = text_match:gsub("\\n", "\n")
+                                 :gsub("\\t", "\t")
+                                 :gsub("\\\"", "\"")
+    
+    batch_text = batch_text .. clean_text
+    last_match_end = match_end
+  end
+
+  -- 2. If we found any text, do ONE update for the whole batch
+  if #batch_text > 0 then
+    vim.schedule(function()
+      insert_at_cursor(batch_text)
+    end)
+  end
+
+  -- 4. Keep only the unprocessed "tail" of the string for the next chunk
+  if last_match_end > 0 then
+    partial_data = partial_data:sub(last_match_end)
+  end
+end
+
+local function prepare_new_line()
+  local win = vim.api.nvim_get_current_win()
+  local buf = vim.api.nvim_get_current_buf()
+  local row, _ = unpack(vim.api.nvim_win_get_cursor(win))
+  
+  -- Get content of the current line
+  local line_content = vim.api.nvim_get_current_line()
+  
+  if line_content:gsub("%s+", "") ~= "" then
+    -- Line isn't empty, create a new one below
+    vim.api.nvim_buf_set_lines(buf, row, row, false, { "" })
+    vim.api.nvim_win_set_cursor(win, { row + 1, 0 })
+  else
+    -- Line is empty, just make sure we are at column 0
+    vim.api.nvim_win_set_cursor(win, { row, 0 })
+  end
+end
+
+M.ask_gemini = function()
+  local api_key = os.getenv("GOOGLE_API_KEY")
+  local url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent"
+
+  local prompt = vim.api.nvim_get_current_line()
+  -- print("Prompt " .. prompt)
+
+  prepare_new_line()
+  start_spinner()
 
   curl.post(url, {
+    raw = { "--no-buffer", "--compressed", "-N" }, -- Disable curl's internal buffering
     headers = {
       ["Content-Type"] = "application/json",
       ["x-goog-api-key"] = api_key,
     },
     body = vim.json.encode({
-      contents = {{ parts = {{ text = prompt }} }}
+      contents = { {
+        parts = { { text = prompt } }
+      } }
     }),
+    stream = function(err, data)
+      if err then
+        -- print("Error: " .. err)
+        return
+      end
+
+      if data then
+        -- 'data' is a single chunk/line of the response
+        vim.schedule(function()
+          -- Update your Neovim buffer here
+          -- print("Received chunk: " .. data)
+          -- insert_at_cursor(data)
+          greedy_parse_and_insert(data)
+        end)
+      end
+    end,
     callback = function(res)
-      local decoded = vim.json.decode(res.body)
+      -- local decoded = vim.json.decode(res.body)
       -- The text response is nested in candidates -> content -> parts
-      local text = decoded.candidates[1].content.parts[1].text
+      -- local text = decoded.candidates[1].content.parts[1].text
 
       vim.schedule(function()
-        print("Gemini says: " .. text)
+        stop_spinner()
+        -- insert_at_cursor(text)
       end)
     end,
   })
