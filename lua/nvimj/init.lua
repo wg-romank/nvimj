@@ -3,7 +3,7 @@ M.repl_job_id = 0
 M.repl_buf_nr = -1
 
 local config = {
-  command = "~/j9.7/bin/jconsole"
+  command = vim.env.REPL_COMMAND
 }
 local ns_id = vim.api.nvim_create_namespace('repl_marks')
 
